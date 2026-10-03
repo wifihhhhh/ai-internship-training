@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-class TaskCreate(Basemodel):
+class TaskCreate(BaseModel):
     title: str = Field(
         min_length=1, 
         max_length=120, 
