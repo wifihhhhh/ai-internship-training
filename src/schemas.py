@@ -42,3 +42,9 @@ class TaskResponse(BaseModel):
     title: str
     completed: bool
     priority: int
+
+class TaskPage(BaseModel):
+    items: list[TaskResponse]
+    page: int
+    page_size: int
+    total: int

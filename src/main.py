@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Query, status
-from src.schemas import TaskCreate, TaskUpdate, TaskReplace, TaskResponse
+from src.schemas import TaskCreate, TaskUpdate, TaskReplace, TaskResponse, TaskPage
 
 app = FastAPI(
     title="AI Internship Training API",
@@ -46,28 +46,40 @@ def get_task_or_404(task_id: int) -> TaskResponse:
 
 reset_tasks()
 
-@app.get("/health", tags=["system"])
-def health() ->dict[str, str]:
-    """健康检查接口"""
-    return {"status": "ok"}
 
 @app.get("/tasks", 
-        response_model=list[TaskResponse],
+        response_model=TaskPage,
         tags=["tasks"]
         )
 def list_tasks(
     completed: bool | None = None,
-    q: str | None = None,
-) -> list[TaskResponse]:
-    """获取任务列表"""
+    q: str | None = Query(default=None, min_length=1),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> TaskPage:
     tasks = list(TASKS.values())
-    if completed is not None:
-        tasks = [task for task in tasks if task["completed"] == completed]
-    if q is not None:
-        keywords = q.lower()
-        tasks = [task for task in tasks if keywords in task["title"].lower()]
 
-    return tasks
+    if completed is not None:
+        tasks = [task for task in tasks if task.completed == completed]
+
+    if q is not None:
+        keyword = q.lower()
+        tasks = [
+            task
+            for task in tasks
+            if keyword in task.title.lower()
+        ]
+
+    total = len(tasks)
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    return TaskPage(
+        items=tasks[start:end],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
 
 @app.get("/tasks/{task_id}",
         response_model=TaskResponse,
