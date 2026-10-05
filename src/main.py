@@ -1,4 +1,9 @@
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from src.database import get_db
+from src.models import Task
 from src.schemas import TaskCreate, TaskUpdate, TaskReplace, TaskResponse, TaskPage
 
 app = FastAPI(
@@ -6,6 +11,9 @@ app = FastAPI(
     version="0.1.0",
     description="用于训练 FastAPI 与 RESTful API 的任务管理服务。",
 )
+@app.get("/health", tags=["system"])
+def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 INITIAL_TASKS: dict[int, TaskResponse] = {
     1: TaskResponse(
@@ -33,9 +41,9 @@ def reset_tasks() -> None:
     TASKS.update(INITIAL_TASKS)
     next_task_id = max(TASKS) + 1
 
-def get_task_or_404(task_id: int) -> TaskResponse:
+def get_task_or_404(db: Session, task_id: int) -> TaskResponse:
     """获取指定任务，如果不存在则抛出 404 异常"""
-    task = TASKS.get(task_id)
+    task = db.get(Task, task_id)
 
     if not task:
         raise HTTPException(
@@ -46,7 +54,9 @@ def get_task_or_404(task_id: int) -> TaskResponse:
 
 reset_tasks()
 
-
+@app.get("/health", tags=["system"])
+def health() -> dict[str, str]:
+    return {"status": "ok"}
 @app.get("/tasks", 
         response_model=TaskPage,
         tags=["tasks"]
@@ -56,26 +66,29 @@ def list_tasks(
     q: str | None = Query(default=None, min_length=1),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
+    db: Session = Depends(get_db),
 ) -> TaskPage:
-    tasks = list(TASKS.values())
+    filters = []
 
     if completed is not None:
-        tasks = [task for task in tasks if task.completed == completed]
+        filters.append(Task.completed == completed)
 
     if q is not None:
-        keyword = q.lower()
-        tasks = [
-            task
-            for task in tasks
-            if keyword in task.title.lower()
-        ]
+        filters.append(Task.title.ilike(f"%{q}%"))
 
-    total = len(tasks)
-    start = (page - 1) * page_size
-    end = start + page_size
+    total_statement = select(func.count()).select_from(Task)
+    task_statement = select(Task).order_by(Task.id)
+
+    if filters:
+        total_statement = total_statement.where(*filters)
+        task_statement = task_statement.where(*filters)
+
+    total = db.scalar(total_statement) or 0
+
+    tasks = db.scalars(task_statement.offset((page - 1) * page_size).limit(page_size)).all()
 
     return TaskPage(
-        items=tasks[start:end],
+        items=tasks,
         page=page,
         page_size=page_size,
         total=total,
@@ -84,9 +97,12 @@ def list_tasks(
 @app.get("/tasks/{task_id}",
         response_model=TaskResponse,
         tags=["tasks"])
-def get_task(task_id: int) -> TaskResponse:
+def get_task(
+    task_id: int,
+    db: Session = Depends(get_db)
+) -> TaskResponse:
     """获取指定任务"""
-    return get_task_or_404(task_id)
+    return get_task_or_404(db, task_id)
 
 @app.post(
     "/tasks",
@@ -95,18 +111,12 @@ def get_task(task_id: int) -> TaskResponse:
     tags=["tasks"]
 )
 
-def create_task(payload: TaskCreate) -> TaskResponse:
+def create_task(payload: TaskCreate, db: Session = Depends(get_db)) -> Task:
     """创建新任务"""
-    global next_task_id
-
-    task = TaskResponse(
-        id=next_task_id,
-        title=payload.title,
-        completed=False,
-        priority=payload.priority,
-    )
-    TASKS[task.id] = task
-    next_task_id += 1
+    task = Task(**payload.model_dump())
+    db.add(task)
+    db.commit()
+    db.refresh(task)
 
     return task
 
@@ -115,16 +125,19 @@ def create_task(payload: TaskCreate) -> TaskResponse:
     response_model=TaskResponse,
     tags=["tasks"],
 )
-def replace_task(task_id: int, payload: TaskReplace) -> TaskResponse:
-    get_task_or_404(task_id)
+def replace_task(
+    task_id: int, 
+    payload: TaskReplace, 
+    db: Session = Depends(get_db)
+) -> TaskResponse:
+    task = get_task_or_404(db, task_id)
 
-    task = TaskResponse(
-        id=task_id,
-        title=payload.title,
-        completed=payload.completed,
-        priority=payload.priority,
-    )
-    TASKS[task.id] = task
+    task.title = payload.title
+    task.completed = payload.completed
+    task.priority = payload.priority
+
+    db.commit()
+    db.refresh(task)
 
     return task
 
@@ -133,20 +146,30 @@ def replace_task(task_id: int, payload: TaskReplace) -> TaskResponse:
     response_model=TaskResponse,
     tags=["tasks"],
 )
-def update_task(task_id: int, payload: TaskUpdate) -> TaskResponse:
-    current_task = get_task_or_404(task_id)
+def update_task(
+    task_id: int, 
+    payload: TaskUpdate, 
+    db: Session = Depends(get_db)
+) -> Task:
+    task = get_task_or_404(db, task_id)
+    for field_name, value in payload.model_dump(exclude_unset=True).items():
+        setattr(task, field_name, value)
     changes = payload.model_dump(exclude_unset=True)
 
-    updated_task = current_task.model_copy(update=changes)
-    TASKS[task_id] = updated_task
+    db.commit()
+    db.refresh(task)
 
-    return updated_task
+    return task
 
 @app.delete(
     "/tasks/{task_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["tasks"],
 )
-def delete_task(task_id: int) -> None:
-    get_task_or_404(task_id)
-    del TASKS[task_id]
+def delete_task(
+    task_id: int, 
+    db: Session = Depends(get_db)
+) -> None:
+    task = get_task_or_404(db, task_id)
+    db.delete(task)
+    db.commit()

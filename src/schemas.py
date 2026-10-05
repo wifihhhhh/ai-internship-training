@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class TaskCreate(BaseModel):
     title: str = Field(
@@ -38,6 +39,8 @@ class TaskReplace(BaseModel):
     )
 
 class TaskResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     title: str
     completed: bool
