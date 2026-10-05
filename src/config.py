@@ -18,6 +18,9 @@ class Settings:
     debug: bool
     log_level: str
     database_url: str
+    redis_enabled: bool
+    redis_url: str
+    cache_ttl_seconds: int
 
 def get_settings() -> Settings:
     """从环境变量中获取配置"""
@@ -26,7 +29,10 @@ def get_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "AI Internship Training"),
         debug=parse_bool(os.getenv("DEBUG", "false")), 
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(), # 读取 LOG_LEVEL；若没配置，就使用默认值 INFO
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./data/tasks.db")  # 读取 DATABASE_URL；若没配置，就使用默认值 sqlite:///./data/tasks.db
+        database_url=os.getenv("DATABASE_URL", "sqlite:///./data/tasks.db"),  # 读取 DATABASE_URL；若没配置，就使用默认值 sqlite:///./data/tasks.db
+        redis_enabled=parse_bool(os.getenv("REDIS_ENABLED", "false")),  # 读取 REDIS_ENABLED；若没配置，就使用默认值 false
+        redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),  # 读取 REDIS_URL；若没配置，就使用默认值 redis://localhost:6379/0
+        cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "60")),  #
     )
 
 settings = get_settings()

@@ -20,7 +20,7 @@ class TaskUpdate(BaseModel):
         min_length=1,
         max_length=120,
     )
-    completed: bool | None = None,
+    completed: bool | None = None
     priority: int | None = Field(
         default=None,
         ge=1,

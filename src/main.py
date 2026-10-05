@@ -1,10 +1,18 @@
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+from redis.exceptions import RedisError
 
 from src.database import get_db
 from src.models import Task
 from src.schemas import TaskCreate, TaskUpdate, TaskReplace, TaskResponse, TaskPage
+from src.cache import get_cache, make_task_list_cache_key, invalidate_task_list_cache
+from src.logging_config import get_logger
+from src.config import settings
+
+logger = get_logger(__name__)
 
 app = FastAPI(
     title="AI Internship Training API",
@@ -13,7 +21,15 @@ app = FastAPI(
 )
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "database": "configured",
+        "cache": (
+            "enabled" 
+            if settings.redis_enabled 
+            else "disabled"
+        )
+    }
 
 INITIAL_TASKS: dict[int, TaskResponse] = {
     1: TaskResponse(
@@ -68,6 +84,17 @@ def list_tasks(
     page_size: int = Query(default=10, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> TaskPage:
+    cache = get_cache()
+    cache_key = make_task_list_cache_key(completed, q, page, page_size,)
+
+    if cache is not None:
+        try:
+            cached_value = cache.get(cache_key)
+
+            if cached_value is not None:
+                return TaskPage.model_validate_json(cached_value)
+        except RedisError:
+            logger.warning("Redis read failed; falling back to database", exc_info=True,)
     filters = []
 
     if completed is not None:
@@ -87,13 +114,25 @@ def list_tasks(
 
     tasks = db.scalars(task_statement.offset((page - 1) * page_size).limit(page_size)).all()
 
-    return TaskPage(
+    result = TaskPage(
         items=tasks,
         page=page,
         page_size=page_size,
         total=total,
     )
 
+    if cache is not None:
+        try:
+            cache.setex(
+                cache_key,
+                settings.cache_ttl_seconds,
+                result.model_dump_json(),
+            )
+        except RedisError:
+            logger.warning("Redis write failed; response still succeeds", exc_info=True)
+
+    return result
+    
 @app.get("/tasks/{task_id}",
         response_model=TaskResponse,
         tags=["tasks"])
@@ -116,6 +155,7 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)) -> Task:
     task = Task(**payload.model_dump())
     db.add(task)
     db.commit()
+    invalidate_task_list_cache()
     db.refresh(task)
 
     return task
@@ -137,6 +177,7 @@ def replace_task(
     task.priority = payload.priority
 
     db.commit()
+    invalidate_task_list_cache()
     db.refresh(task)
 
     return task
@@ -157,6 +198,7 @@ def update_task(
     changes = payload.model_dump(exclude_unset=True)
 
     db.commit()
+    invalidate_task_list_cache()
     db.refresh(task)
 
     return task
@@ -173,3 +215,17 @@ def delete_task(
     task = get_task_or_404(db, task_id)
     db.delete(task)
     db.commit()
+    invalidate_task_list_cache()
+
+# 数据库错误处理器
+@app.exception_handler(SQLAlchemyError)
+async def handle_database_error(
+    request: Request,
+    error: SQLAlchemyError,
+) -> JSONResponse:
+    logger.exception("Database operation failed: %s", error,)
+
+    return JSONResponse(
+        status_code=503, # 服务暂时不可用
+        content={"detail": "Database is temporarily unavailable"},
+    )
