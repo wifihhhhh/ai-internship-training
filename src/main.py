@@ -11,6 +11,7 @@ from src.schemas import TaskCreate, TaskUpdate, TaskReplace, TaskResponse, TaskP
 from src.cache import get_cache, make_task_list_cache_key, invalidate_task_list_cache
 from src.logging_config import get_logger
 from src.config import settings
+from src.tool_agent.api import router as tool_agent_router
 
 logger = get_logger(__name__)
 
@@ -19,6 +20,7 @@ app = FastAPI(
     version="0.1.0",
     description="用于训练 FastAPI 与 RESTful API 的任务管理服务。",
 )
+app.include_router(tool_agent_router)
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
     return {
