@@ -3,3 +3,25 @@ __pycache__/
 .pytest_cache/
 .env
 data/*.db
+# 后续独立训练环境
+.venv-*/
+
+# 本地向量库、状态数据库和评估数据
+data/chroma/
+data/evaluations/
+data/*.sqlite*
+data/pytest*/
+
+# 训练数据和训练产物
+data/training/
+data/sft/
+models/
+exports/
+
+# 模型与编译产物
+*.pt
+*.keras
+cpp/*.exe
+
+# 前端生成的实验结果
+training_frontend/results.json

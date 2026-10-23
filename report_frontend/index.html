@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>学习简报助手</title>
+    <style>
+        body {
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 0 20px;
+            font-family: sans-serif;
+            line-height: 1.7;
+        }
+        input, textarea {
+            width: 100%;
+            box-sizing: border-box;
+            margin-bottom: 12px;
+        }
+        textarea { min-height: 90px; }
+        button { margin: 8px 8px 8px 0; }
+        pre {
+            white-space: pre-wrap;
+            background: #f4f5f7;
+            padding: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>学习简报助手</h1>
+    <label>本地服务访问令牌，不是百炼密钥</label>
+    <input id="token" type="password">
+    <textarea id="question">根据学习笔记，整理Redis缓存失效简报。</textarea>
+    <button id="create">生成简报</button>
+    <button id="approve">批准导出</button>
+    <button id="reject">拒绝</button>
+    <button id="download">下载</button>
+    <p id="status"></p>
+    <pre id="preview"></pre>
+
+    <script>
+        let current = null;
+
+        const statusBox = document.querySelector("#status");
+        const preview = document.querySelector("#preview");
+        const createButton = document.querySelector("#create");
+        const approveButton = document.querySelector("#approve");
+        const rejectButton = document.querySelector("#reject");
+        const downloadButton = document.querySelector("#download");
+        
+        function headers() {
+            return {
+                "Authorization": "Bearer " + document.querySelector("#token").value,
+                "Content-Type": "application/json"
+            };
+        }
+
+        async function request(path, method = "GET", body = undefined) {
+            const response = await fetch(path, {
+                method,
+                headers: headers(),
+                body: body == undefined ? undefined : JSON.stringify(body)
+            });
+
+            const text = await response.text();
+            let data;
+
+            try {
+                data = text ? JSON.parse(text) : {};
+            } catch {
+                throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+            }
+
+            if (!response.ok) {
+                throw new Error(JSON.stringify(data.detail || data));
+            }
+
+            return data;
+        }
+
+        function render(data) {
+            current = data;
+            statusBox.textContent = `task ${data.task_id}: ${data.status}`;
+
+            preview.textContent = data.approval
+                ? data.approval.preview
+                : JSON.stringify({draft: data.draft, review: data.review}, null, 2);
+
+                const waiting = data.status ==="awaiting_approval";
+                approveButton.disabled = !waiting;
+                rejectButton.disabled = !waiting;
+                downloadButton.disabled = data.status !== "exported";
+        }
+
+        createButton.addEventListener("click", async () => {
+            createButton.disabled = true;
+            approveButton.disabled = true;
+            rejectButton.disabled = true;
+            downloadButton.disabled = true;
+            statusBox.textContent = "正在检索、写作和审查……";
+
+            try {
+                render(await request("/tasks", "POST", {
+                    question: document.querySelector("#question").value
+                }));
+            } catch (error) {
+                statusBox.textContent = error.message;
+            } finally {
+                createButton.disabled = false;
+            }
+        });
+
+        async function decide(approved) {
+            approveButton.disabled = true;
+            rejectButton.disabled = true;
+
+            try {
+                render(await request(
+                    `/tasks/${current.task_id}/decision`,
+                    "POST",
+                    {approved, digest: current.approval.digest}
+                ));
+            } catch (error) {
+                statusBox.textContent = error.message;
+            }
+        }
+
+        approveButton.addEventListener("click", () => decide(true));
+        rejectButton.addEventListener("click", () => decide(false));
+        
+        downloadButton.addEventListener("click", async () => {
+            try {
+                const response = await fetch(
+                    `/tasks/${current.task_id}/download`,
+                    {headers: headers()}
+                );
+
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+
+                const url = URL.createObjectURL(await response.blob());
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `report-${current.task_id}.md`;
+                link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            } catch (error) {
+                statusBox.textContent = error.message;
+            }
+        });
+    </script>
+</body>
+</html>

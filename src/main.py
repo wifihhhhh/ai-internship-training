@@ -4,6 +4,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from redis.exceptions import RedisError
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
 
 from src.database import get_db
 from src.models import Task
@@ -12,6 +14,9 @@ from src.cache import get_cache, make_task_list_cache_key, invalidate_task_list_
 from src.logging_config import get_logger
 from src.config import settings
 from src.tool_agent.api import router as tool_agent_router
+from src.langchain_lab.api import router as langchain_router
+from src.rag_lab.api import router as rag_router
+from src.workflow_lab.api import router as workflow_router
 
 logger = get_logger(__name__)
 
@@ -20,7 +25,20 @@ app = FastAPI(
     version="0.1.0",
     description="用于训练 FastAPI 与 RESTful API 的任务管理服务。",
 )
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+app.mount(
+    "/rag-ui",
+    StaticFiles(
+        directory=str(PROJECT_ROOT / "frontend"),
+        html=True,
+    ),
+    name="rag-ui",
+)
 app.include_router(tool_agent_router)
+app.include_router(langchain_router)
+app.include_router(rag_router)
+app.include_router(workflow_router)
+
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
     return {
